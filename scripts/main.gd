@@ -10,7 +10,8 @@ const TAM_OBSTACULO := Vector2(80, 80)
 const VELOCIDADE_JOGADOR := 900.0
 const INTERVALO_SPAWN := 0.7
 const VELOCIDADE_BASE := 350.0
-const VIDAS_INICIAIS := 30
+const VIDAS_INICIAIS := 3
+const ARQUIVO_RECORDE := "user://recorde.cfg"
 const CASCOS_JOGADOR := [
 	[
 		Vector2(24.0 / 120.0, 18.0 / 96.0),
@@ -45,37 +46,73 @@ const CONTORNO_METEORO := [
 
 const TEX_JOGADOR := "res://assets/kenney/playerShip1_blue.png"
 const TEX_OBSTACULO := "res://assets/kenney/meteorBrown_big1.png"
+const MUSICA_MENU := preload("res://assets/audio/menu_theme.wav")
+const MUSICA_FIM := preload("res://assets/audio/game_over.wav")
 
 var jogando := false
 var pontos := 0.0
 var vidas := VIDAS_INICIAIS
+var recorde := 0
 var dificuldade := 1.0
 var tempo_spawn := 0.0
 var obstaculos: Array = []
+var estrelas: Array[Dictionary] = []
 var jogador
 var rotulo_pontos: Label
 var rotulo_vidas: Label
 var rotulo_msg: Label
+var dialogo_nova_partida: ConfirmationDialog
+var tocador_menu: AudioStreamPlayer
+var tocador_fim: AudioStreamPlayer
 var sobreposicao_flash: ColorRect
 var tween_flash: Tween
+var tempo_fundo := 0.0
 var rng := RandomNumberGenerator.new()
 
 
 func _ready() -> void:
 	rng.randomize()
+	_carregar_recorde()
 	_criar_fundo()
 	_criar_jogador()
 	_criar_interface()
+	_criar_dialogo_nova_partida()
+	_criar_tocadores_musica()
 	_criar_efeitos_colisao()
-	_mostrar_mensagem("Setas ou toque para mover\nToque/clique para começar")
+	_mostrar_mensagem("DESVIE DOS METEOROS\nSetas ou toque para mover\nToque/clique para iniciar")
+	tocador_menu.play()
 
 
 func _criar_fundo() -> void:
-	var fundo := ColorRect.new()
-	fundo.color = Color(0.05, 0.05, 0.12)
-	fundo.size = Vector2(LARGURA, ALTURA)
-	fundo.z_index = -10
-	add_child(fundo)
+	for i in range(120):
+		estrelas.append({
+			"posicao": Vector2(rng.randf_range(0.0, LARGURA), rng.randf_range(0.0, ALTURA)),
+			"raio": rng.randf_range(0.7, 2.2),
+			"velocidade": rng.randf_range(12.0, 52.0),
+			"fase": rng.randf_range(0.0, TAU),
+		})
+	queue_redraw()
+
+
+func _draw() -> void:
+	draw_rect(Rect2(Vector2.ZERO, Vector2(LARGURA, ALTURA)), Color(0.012, 0.018, 0.065))
+	draw_circle(Vector2(130.0, 360.0), 300.0, Color(0.10, 0.035, 0.19, 0.28))
+	draw_circle(Vector2(590.0, 790.0), 340.0, Color(0.025, 0.09, 0.20, 0.24))
+	draw_circle(Vector2(600.0, 790.0), 132.0, Color(0.10, 0.23, 0.38, 0.56))
+	draw_circle(Vector2(577.0, 758.0), 108.0, Color(0.15, 0.32, 0.48, 0.42))
+	draw_arc(
+		Vector2(600.0, 790.0),
+		158.0,
+		PI * 0.08,
+		PI * 0.92,
+		64,
+		Color(0.34, 0.56, 0.78, 0.44),
+		3.0
+	)
+	for estrela in estrelas:
+		var brilho := 0.45 + 0.45 * sin(tempo_fundo * 1.8 + estrela["fase"])
+		var cor := Color(0.72, 0.84, 1.0, brilho)
+		draw_circle(estrela["posicao"], estrela["raio"], cor)
 
 
 func _criar_jogador() -> void:
@@ -102,8 +139,10 @@ func _criar_sprite(caminho: String, tamanho: Vector2, cor_fallback: Color) -> No
 func _criar_interface() -> void:
 	rotulo_pontos = Label.new()
 	rotulo_pontos.position = Vector2(24, 40)
+	rotulo_pontos.size = Vector2(340, 110)
 	rotulo_pontos.add_theme_font_size_override("font_size", 48)
 	add_child(rotulo_pontos)
+	_atualizar_rotulo_pontos()
 
 	rotulo_vidas = Label.new()
 	rotulo_vidas.position = Vector2(420, 40)
@@ -121,6 +160,55 @@ func _criar_interface() -> void:
 	add_child(rotulo_msg)
 
 
+func _criar_dialogo_nova_partida() -> void:
+	dialogo_nova_partida = ConfirmationDialog.new()
+	dialogo_nova_partida.title = "Nova partida"
+	dialogo_nova_partida.dialog_text = "Quer iniciar uma partida nova?"
+	dialogo_nova_partida.ok_button_text = "Iniciar"
+	dialogo_nova_partida.confirmed.connect(_iniciar)
+	add_child(dialogo_nova_partida)
+
+
+func _criar_tocadores_musica() -> void:
+	var musica_menu := MUSICA_MENU as AudioStreamWAV
+	musica_menu.loop_mode = AudioStreamWAV.LOOP_FORWARD
+	musica_menu.loop_begin = 0
+	musica_menu.loop_end = int(musica_menu.mix_rate * 8.0)
+
+	tocador_menu = AudioStreamPlayer.new()
+	tocador_menu.stream = musica_menu
+	tocador_menu.volume_db = -8.0
+	add_child(tocador_menu)
+
+	tocador_fim = AudioStreamPlayer.new()
+	tocador_fim.stream = MUSICA_FIM
+	tocador_fim.volume_db = -5.0
+	add_child(tocador_fim)
+
+
+func _carregar_recorde() -> void:
+	if not FileAccess.file_exists(ARQUIVO_RECORDE):
+		return
+	var configuracao := ConfigFile.new()
+	var erro := configuracao.load(ARQUIVO_RECORDE)
+	if erro != OK:
+		push_error("Não foi possível carregar o recorde: %s" % error_string(erro))
+		return
+	recorde = int(configuracao.get_value("jogo", "recorde", 0))
+
+
+func _salvar_recorde() -> void:
+	var configuracao := ConfigFile.new()
+	configuracao.set_value("jogo", "recorde", recorde)
+	var erro := configuracao.save(ARQUIVO_RECORDE)
+	if erro != OK:
+		push_error("Não foi possível salvar o recorde: %s" % error_string(erro))
+
+
+func _atualizar_rotulo_pontos() -> void:
+	rotulo_pontos.text = "Pontos: %d\nRecorde: %d" % [int(pontos), recorde]
+
+
 func _criar_efeitos_colisao() -> void:
 	sobreposicao_flash = ColorRect.new()
 	sobreposicao_flash.color = Color(0.8, 0.92, 1.0, 0.0)
@@ -136,11 +224,12 @@ func _mostrar_mensagem(texto: String) -> void:
 
 
 func _process(delta: float) -> void:
+	_animar_fundo(delta)
 	if not jogando:
 		return
 	pontos += delta
 	dificuldade = 1.0 + pontos / 20.0
-	rotulo_pontos.text = "Pontos: %d" % int(pontos)
+	_atualizar_rotulo_pontos()
 	_mover_jogador(delta)
 	tempo_spawn -= delta
 	if tempo_spawn <= 0.0:
@@ -148,6 +237,19 @@ func _process(delta: float) -> void:
 		tempo_spawn = INTERVALO_SPAWN / dificuldade
 	_mover_obstaculos(delta)
 	_verificar_colisao()
+
+
+func _animar_fundo(delta: float) -> void:
+	tempo_fundo += delta
+	for i in range(estrelas.size()):
+		var estrela := estrelas[i]
+		var posicao: Vector2 = estrela["posicao"]
+		posicao.y += estrela["velocidade"] * delta
+		if posicao.y > ALTURA:
+			posicao.y = 0.0
+			posicao.x = rng.randf_range(0.0, LARGURA)
+		estrela["posicao"] = posicao
+	queue_redraw()
 
 
 func _mover_jogador(delta: float) -> void:
@@ -164,12 +266,19 @@ func _unhandled_input(evento: InputEvent) -> void:
 	# emulate_touch_from_mouse converte o mouse em toque: um código só
 	if evento is InputEventScreenTouch and evento.pressed:
 		if not jogando:
-			_iniciar()
-		_mover_para(evento.position.x)
+			_solicitar_nova_partida()
+		else:
+			_mover_para(evento.position.x)
 	elif evento is InputEventScreenDrag:
 		_mover_para(evento.position.x)
-	elif evento is InputEventKey and evento.pressed and not jogando:
-		_iniciar()
+	elif evento is InputEventKey and evento.pressed and not evento.echo and not jogando:
+		if evento.keycode in [KEY_ENTER, KEY_SPACE]:
+			_solicitar_nova_partida()
+
+
+func _solicitar_nova_partida() -> void:
+	if not dialogo_nova_partida.visible:
+		dialogo_nova_partida.popup_centered(Vector2i(440, 180))
 
 
 func _mover_para(x: float) -> void:
@@ -181,6 +290,8 @@ func _iniciar() -> void:
 	for obstaculo in obstaculos:
 		obstaculo.queue_free()
 	obstaculos.clear()
+	tocador_menu.stop()
+	tocador_fim.stop()
 	pontos = 0.0
 	vidas = VIDAS_INICIAIS
 	_atualizar_rotulo_vidas()
@@ -188,6 +299,7 @@ func _iniciar() -> void:
 	tempo_spawn = 0.3
 	jogando = true
 	rotulo_msg.visible = false
+	jogador.position = Vector2(LARGURA / 2 - TAM_JOGADOR.x / 2, ALTURA - 180)
 
 
 func _spawn_obstaculo() -> void:
@@ -364,4 +476,14 @@ func _atualizar_rotulo_vidas() -> void:
 
 func _game_over() -> void:
 	jogando = false
-	_mostrar_mensagem("Fim de jogo man! Pontos: %d\nToque/clique para jogar de novo" % int(pontos))
+	var pontuacao_final := int(pontos)
+	if pontuacao_final > recorde:
+		recorde = pontuacao_final
+		_salvar_recorde()
+	_atualizar_rotulo_pontos()
+	_mostrar_mensagem(
+		"Fim de jogo! Pontos: %d\nRecorde: %d\nToque/clique para jogar de novo"
+		% [pontuacao_final, recorde]
+	)
+	tocador_menu.stop()
+	tocador_fim.play()
