@@ -1,0 +1,81 @@
+name: Build Esquiva
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  GODOT_VERSION: 4.6.3
+
+jobs:
+  android:
+    name: Build Android (APK)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Instalar Godot
+        run: |
+          wget -q https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip
+          unzip -q Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip
+          sudo mv Godot_v${GODOT_VERSION}-stable_linux.x86_64 /usr/local/bin/godot
+
+      - name: Instalar templates de export
+        run: |
+          wget -q https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz
+          unzip -q Godot_v${GODOT_VERSION}-stable_export_templates.tpz
+          mkdir -p ~/.local/share/godot/export_templates
+          mv templates ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable
+
+      - name: Gerar keystore de debug
+        run: |
+          keytool -keyalg RSA -genkeypair -v -keystore debug.keystore \
+            -alias androiddebugkey -dname "CN=Android Debug,O=Android,C=US" \
+            -keypass android -storepass android -validity 9999
+
+      - name: Exportar APK
+        run: |
+          godot --headless --import
+          godot --headless --export-release "Android" Esquiva.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: esquiva-android
+          path: Esquiva.apk
+
+  ios:
+    name: Build iOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar Godot
+        run: |
+          wget -q https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_macos.universal.zip
+          unzip -q Godot_v${GODOT_VERSION}-stable_macos.universal.zip
+          sudo cp Godot_v${GODOT_VERSION}-stable_macos.universal/Godot.app/Contents/MacOS/Godot /usr/local/bin/godot
+
+      - name: Instalar templates de export
+        run: |
+          wget -q https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz
+          unzip -q Godot_v${GODOT_VERSION}-stable_export_templates.tpz
+          mkdir -p "$HOME/Library/Application Support/Godot/export_templates"
+          mv templates "$HOME/Library/Application Support/Godot/export_templates/${GODOT_VERSION}.stable"
+
+      - name: Exportar projeto iOS
+        run: |
+          godot --headless --import
+          godot --headless --export-release "iOS" build/ios/Esquiva.xcodeproj.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: esquiva-ios
+          path: build/ios/

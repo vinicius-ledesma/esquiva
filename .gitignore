@@ -1,0 +1,9 @@
+.godot/
+.import/
+.vscode/
+export/
+build/
+*.apk
+*.aab
+*.ipa
+*.keystore
